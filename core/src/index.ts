@@ -2,9 +2,9 @@ export { createDefaultStorageProvider } from "./storage";
 export { createLensLogin, LensLoginClient } from "./lens-login";
 export type {
   CreateLensAccountInput,
-  LensAuthenticatedResult,
   LensAccountOption,
   LensAccountRole,
+  LensAuthenticatedResult,
   LensEnvironment,
   LensLoginConfig,
   LensLoginStatus,
@@ -16,3 +16,4 @@ export type {
   LensWalletAdapter,
   ResumeLensSessionResult,
 } from "./types";
+export type { LensStorageProvider } from "./storage";

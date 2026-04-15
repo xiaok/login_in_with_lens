@@ -1,30 +1,37 @@
 # Login With Lens
 
-`./login_with_lens` contains a headless Lens login SDK plus a small demo app.
+`./login_with_lens` contains:
+
+- `core/`: the browser SDK, centered around `createLensLogin(...)`
+- `server/`: the server SDK for Lens authentication primitives
+- `demo/client/`: a Privy-based frontend demo
+- `demo/server/`: a minimal backend demo
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 
-## Structure
+## Overview
 
-- `core/`: framework-agnostic TypeScript SDK for wallet-based Lens sign-in
-- `demo/`: Privy-powered demo showing wallet connect, account selection/creation, and profile fetch
+`core` is a minimal browser SDK for Lens flows:
 
-## What the SDK does
+- wallet connection
+- account discovery
+- account selection
+- account creation
+- profile retrieval
 
-The SDK is designed to feel like a login provider integration rather than a one-off script:
+`server` is a minimal server SDK for Lens authentication:
 
-1. Detect the connected wallet address
-2. Query Lens accounts available to that wallet
-3. If one account exists, log in directly
-4. If multiple accounts exist, return a selection step to the host app
-5. If no account exists, return an onboarding step so the host app can create one
-6. After authentication, fetch the Lens profile and return a normalized result
+- challenge creation
+- signed challenge verification
+- session resume
+- authenticated-session lookup
+- logout
 
-The SDK does not render UI. The host website owns the UX.
+The SDK packages do not define an HTTP API contract.
 
-## Quick start
+If you want REST endpoints, GraphQL endpoints, RPC methods, or framework-specific handlers, build them in your own app or follow the demo implementation.
 
-Install the package and create a wallet adapter:
+## Core Quick Start
 
 ```ts
 import { createLensLogin } from "@login-with-lens/core";
@@ -38,10 +45,13 @@ const lens = createLensLogin({
       return wallet.address;
     },
     async signMessage(message) {
-      return signer.signMessage({ message });
+      return provider.request({
+        method: "personal_sign",
+        params: [message, wallet.address],
+      });
     },
     async handleLensOperation(request) {
-      return executeTransactionRequest(request);
+      return executeLensTransaction(request);
     },
   },
 });
@@ -49,7 +59,7 @@ const lens = createLensLogin({
 const result = await lens.signIn();
 ```
 
-Handle the returned step:
+Handle the next step:
 
 ```ts
 if (result.status === "authenticated") {
@@ -78,9 +88,9 @@ if (result.status === "needs_account_creation") {
 - `appAddress`: Lens app address
 - `environment`: `"mainnet"` or `"testnet"`
 - `origin`: optional non-browser origin override
-- `wallet`: adapter that can provide address and SIWE signature
-- `storage`: optional Lens SDK storage provider
-- `onStatusChange`: optional callback for flow state changes
+- `wallet`: adapter that provides address, signing, and optional transaction execution
+- `storage`: optional Lens SDK storage for browser-side Lens sessions
+- `onStatusChange`: optional flow status callback
 
 Methods:
 
@@ -90,9 +100,7 @@ Methods:
 - `resumeSession()`
 - `logout()`
 
-## Wallet adapter contract
-
-The core package intentionally does not depend on Privy, wagmi, ethers, or a UI framework.
+## Wallet Adapter
 
 ```ts
 type LensWalletAdapter = {
@@ -102,31 +110,73 @@ type LensWalletAdapter = {
 };
 ```
 
-`handleLensOperation` is only required for create-account flows because Lens account creation may return a sponsored or self-funded transaction request.
+`handleLensOperation` is only required for account-creation flows that may return a sponsored or self-funded transaction request.
+
+## Server SDK
+
+The `server/` package exposes Lens authentication primitives to your backend. It does not require a specific HTTP API shape.
+
+Typical usage:
+
+```ts
+import { createLensLoginServer } from "@login-with-lens/server";
+
+const server = createLensLoginServer({
+  appAddress: "0xYOUR_LENS_APP_ADDRESS",
+  environment: "mainnet",
+  origin: "https://your-app.com",
+});
+
+const challenge = await server.createChallenge({
+  walletAddress: "0x...",
+  accountAddress: "0x...",
+  role: "accountOwner",
+});
+
+const verified = await server.verifyChallenge({
+  flowId: challenge.flowId,
+  challengeId: challenge.challengeId,
+  signature: "0x...",
+});
+```
+
+From there, your own backend decides how to expose those operations to the client.
 
 ## Demo
 
-The demo is a Vite React app that uses Privy for wallet connectivity and the headless SDK for Lens logic.
+The demo is intentionally where the HTTP API is defined.
 
-It is configured to allow both wallet login and email login. For email login to work end-to-end, enable email in the Privy Dashboard and allow Privy embedded wallets for the app, because Lens authentication still requires an EVM wallet signature.
+- `demo/client`: Vite + React + Privy
+- `demo/server`: Node server using `@login-with-lens/server`
 
-Environment variables:
+Client environment variables:
 
 ```bash
 VITE_PRIVY_APP_ID=
 VITE_LENS_APP_ADDRESS=
 VITE_LENS_ENVIRONMENT=testnet
+VITE_LENS_SERVER_URL=http://localhost:8787
 ```
 
-Run it from `login_with_lens/demo`:
+Server environment variables:
 
 ```bash
+PORT=8787
+DEMO_CLIENT_ORIGIN=http://localhost:5173
+DEMO_LENS_APP_ADDRESS=0xC75A89145d765c396fd75CbD16380Eb184Bd2ca7
+DEMO_LENS_ENVIRONMENT=testnet
+```
+
+Run the demo:
+
+```bash
+cd demo/server
+pnpm install
+pnpm dev
+
+cd ../client
 pnpm install
 pnpm dev
 ```
 
-## Notes
-
-- `mainnet` and `testnet` are both supported through config.
-- Session persistence uses `localStorage` by default in browser environments.
-- The demo only shows one reference UX. Production sites should replace it with their own account picker and onboarding flow.
+For email login to work end-to-end, enable both email login and embedded wallets in the Privy Dashboard, because Lens authentication still requires an EVM wallet signature.

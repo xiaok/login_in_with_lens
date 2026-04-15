@@ -1,6 +1,6 @@
 import type { ConnectedWallet } from "@privy-io/react-auth";
-import { chains } from "@lens-chain/sdk/viem";
 import { handleOperationWith } from "@lens-protocol/client/viem";
+import { chains } from "@lens-chain/sdk/viem";
 import { custom, createWalletClient } from "viem";
 
 import type { LensEnvironment, LensWalletAdapter } from "@login-with-lens/core";
@@ -15,7 +15,7 @@ export async function createPrivyLensWalletAdapter(
   try {
     await wallet.switchChain(chain.id);
   } catch {
-    // Some external wallets are already on the desired network or refuse a no-op switch.
+    // Some wallets reject no-op switches.
   }
 
   const walletClient = createWalletClient({
@@ -42,6 +42,7 @@ export async function createPrivyLensWalletAdapter(
     },
     async handleLensOperation(request) {
       const result = await handleOperationWith(walletClient)(request as never);
+
       if (result.isErr()) {
         throw new Error(result.error.message);
       }

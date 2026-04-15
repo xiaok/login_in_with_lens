@@ -11,6 +11,8 @@ export type LensEnvironment = "mainnet" | "testnet";
 export type LensLoginStatus =
   | "idle"
   | "checking_accounts"
+  | "requesting_challenge"
+  | "verifying_signature"
   | "needs_account_selection"
   | "needs_account_creation"
   | "authenticating"
@@ -29,7 +31,19 @@ export type LensAccountOption = {
   displayName: string | null;
   pictureUrl: string | null;
   role: LensAccountRole;
-  raw: AccountAvailable;
+  raw?: AccountAvailable;
+};
+
+export type LensAuthenticatedSession = {
+  authenticationId: string;
+  app: string;
+  signer: string;
+  browser: string | null;
+  device: string | null;
+  os: string | null;
+  origin: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type LensProfile = {
@@ -43,8 +57,8 @@ export type LensProfile = {
   coverPictureUrl: string | null;
   signless: boolean;
   sponsored: boolean;
-  account: Account;
-  me: MeResult;
+  account?: Account;
+  me?: MeResult;
 };
 
 export type LensAuthenticatedResult = {

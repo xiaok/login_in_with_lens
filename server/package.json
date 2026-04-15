@@ -1,5 +1,5 @@
 {
-  "name": "@login-with-lens/core",
+  "name": "@login-with-lens/server",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -10,8 +10,6 @@
     ".": "./src/index.ts"
   },
   "peerDependencies": {
-    "@lens-chain/storage-client": "1.x",
-    "@lens-protocol/client": "0.0.0-canary-*",
-    "@lens-protocol/metadata": "2.x"
+    "@lens-protocol/client": "0.0.0-canary-*"
   }
 }

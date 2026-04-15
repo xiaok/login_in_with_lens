@@ -1,10 +1,10 @@
 import type { Account, AccountAvailable, MeResult } from "@lens-protocol/client";
-import type { LensAuthenticatedSession, LensLoginStatus, LensProfile } from "./types";
 
-export const LENS_CHAIN_ID: Record<"mainnet" | "testnet", number> = {
-  mainnet: 232,
-  testnet: 37111,
-};
+import type {
+  LensAccountOption,
+  LensAuthenticatedSession,
+  LensProfile,
+} from "./types";
 
 export function assertOk<T, E extends Error>(
   result: { isErr(): boolean; _unsafeUnwrap(): T; _unsafeUnwrapErr(): E },
@@ -13,12 +13,19 @@ export function assertOk<T, E extends Error>(
   if (result.isErr()) {
     throw new Error(`${message}: ${result._unsafeUnwrapErr().message}`);
   }
+
   return result._unsafeUnwrap();
 }
 
 export function pickMediaUrl(media: unknown): string | null {
-  if (!media) return null;
-  if (typeof media === "string") return media;
+  if (!media) {
+    return null;
+  }
+
+  if (typeof media === "string") {
+    return media;
+  }
+
   if (typeof media === "object") {
     const candidate = media as Record<string, unknown>;
     const original =
@@ -26,12 +33,15 @@ export function pickMediaUrl(media: unknown): string | null {
         ? (candidate.original as Record<string, unknown>)
         : null;
     const direct = candidate.raw ?? candidate.uri ?? candidate.item ?? original?.url;
-    if (typeof direct === "string") return direct;
+    if (typeof direct === "string") {
+      return direct;
+    }
   }
+
   return null;
 }
 
-export function normalizeAccountOption(item: AccountAvailable) {
+export function normalizeAccountOption(item: AccountAvailable): LensAccountOption {
   return {
     accountAddress: item.account.address,
     ownerAddress: item.account.owner,
@@ -40,8 +50,7 @@ export function normalizeAccountOption(item: AccountAvailable) {
     displayName: item.account.metadata?.name ?? null,
     pictureUrl: pickMediaUrl(item.account.metadata?.picture),
     role: item.__typename === "AccountManaged" ? "manager" : "owner",
-    raw: item,
-  } as const;
+  };
 }
 
 export function profileFromAccount(account: Account, me: MeResult): LensProfile {
@@ -56,8 +65,6 @@ export function profileFromAccount(account: Account, me: MeResult): LensProfile 
     coverPictureUrl: pickMediaUrl(account.metadata?.coverPicture),
     signless: Boolean(me.isSignless),
     sponsored: Boolean(me.isSponsored),
-    account,
-    me,
   };
 }
 
@@ -83,24 +90,4 @@ export function normalizeAuthenticatedSession(session: {
     createdAt: session.createdAt.toISOString(),
     updatedAt: session.updatedAt.toISOString(),
   };
-}
-
-export function suggestedUsername(walletAddress: string): string {
-  return `lens-${walletAddress.slice(2, 8).toLowerCase()}`;
-}
-
-export function normalizeUsername(localName: string): string {
-  return localName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-export function setStatus(
-  onStatusChange: ((status: LensLoginStatus) => void) | undefined,
-  status: LensLoginStatus,
-): void {
-  onStatusChange?.(status);
 }

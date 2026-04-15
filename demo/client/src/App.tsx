@@ -4,6 +4,7 @@ import { useConnectOrCreateWallet, usePrivy, useWallets } from "@privy-io/react-
 import {
   createLensLogin,
   type CreateLensAccountInput,
+  type LensAuthenticatedSession,
   type LensAccountOption,
   type LensEnvironment,
   type LensLoginStatus,
@@ -23,10 +24,12 @@ export function App() {
     ? "mainnet"
     : "testnet") as LensEnvironment;
   const appAddress = import.meta.env.VITE_LENS_APP_ADDRESS;
+  const serverUrl = import.meta.env.VITE_LENS_SERVER_URL ?? "http://localhost:8787";
 
   const [status, setStatus] = useState<LensLoginStatus>("idle");
   const [message, setMessage] = useState<string>("");
   const [profile, setProfile] = useState<LensProfile | null>(null);
+  const [sessions, setSessions] = useState<LensAuthenticatedSession[]>([]);
   const [options, setOptions] = useState<LensAccountOption[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<CreateLensAccountInput>({
@@ -55,9 +58,48 @@ export function App() {
 
   useEffect(() => {
     if (authenticated) {
-      setMessage("Wallet connected. You can continue with Lens sign-in.");
+      setMessage("Privy authentication is ready. Continue with Lens sign-in.");
     }
   }, [authenticated]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restore() {
+      const sessionId = window.localStorage.getItem("login-with-lens:demo-app-session");
+      if (!sessionId) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${serverUrl}/api/sessions/current`, {
+          headers: {
+            "x-lens-app-session": sessionId,
+          },
+        });
+        const result = await readJson<{
+          appSessionId: string;
+          profile: LensProfile;
+          authenticatedSessions: LensAuthenticatedSession[];
+        }>(response);
+
+        if (cancelled) {
+          return;
+        }
+
+        setProfile(result.profile);
+        setSessions(result.authenticatedSessions);
+      } catch {
+        window.localStorage.removeItem("login-with-lens:demo-app-session");
+      }
+    }
+
+    void restore();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [serverUrl]);
 
   async function handleLensLogin() {
     setMessage("");
@@ -79,21 +121,23 @@ export function App() {
         throw new Error("Lens client could not be initialized.");
       }
 
-      const result = await client.signIn();
+      const result = await fetchAvailableAccounts(wallet.address);
 
-      if (result.status === "authenticated") {
-        setProfile(result.profile);
-        setOptions([]);
-        setShowCreate(false);
-        return;
-      }
+      if (result.length > 0) {
+        if (result.length === 1) {
+          const authenticatedResult = await authenticateAccount(result[0]);
+          setProfile(authenticatedResult.profile);
+          setSessions(authenticatedResult.authenticatedSessions);
+          setOptions([]);
+          setShowCreate(false);
+          return;
+        }
 
-      if (result.status === "needs_account_selection") {
-        setOptions(result.accounts);
+        setOptions(result);
         setShowCreate(false);
         setForm((current) => ({
           ...current,
-          username: current.username || result.accounts[0]?.localName || "",
+          username: current.username || result[0]?.localName || "",
         }));
         return;
       }
@@ -102,7 +146,7 @@ export function App() {
       setShowCreate(true);
       setForm((current) => ({
         ...current,
-        username: current.username || result.suggestedUsername,
+        username: current.username || suggestedUsername(wallet.address),
       }));
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Unknown Lens login error";
@@ -118,8 +162,14 @@ export function App() {
         throw new Error("Lens client is not ready.");
       }
 
-      const result = await client.selectAccount(accountAddress);
+      const account = options.find((item) => item.accountAddress === accountAddress);
+      if (!account) {
+        throw new Error("Lens account is no longer available.");
+      }
+
+      const result = await authenticateAccount(account);
       setProfile(result.profile);
+      setSessions(result.authenticatedSessions);
       setOptions([]);
       setShowCreate(false);
     } catch (error) {
@@ -137,7 +187,18 @@ export function App() {
       }
 
       const result = await client.createAccount(form);
-      setProfile(result.profile);
+      const account: LensAccountOption = {
+        accountAddress: result.profile.accountAddress,
+        ownerAddress: result.profile.ownerAddress,
+        username: result.profile.username,
+        localName: result.profile.localName,
+        displayName: result.profile.displayName,
+        pictureUrl: result.profile.pictureUrl,
+        role: "owner",
+      };
+      const authenticatedResult = await authenticateAccount(account);
+      setProfile(authenticatedResult.profile);
+      setSessions(authenticatedResult.authenticatedSessions);
       setOptions([]);
       setShowCreate(false);
     } catch (error) {
@@ -148,14 +209,104 @@ export function App() {
   }
 
   async function handleLogout() {
+    const sessionId = window.localStorage.getItem("login-with-lens:demo-app-session");
+    if (sessionId) {
+      await fetch(`${serverUrl}/api/sessions/logout`, {
+        method: "POST",
+        headers: {
+          "x-lens-app-session": sessionId,
+        },
+      });
+      window.localStorage.removeItem("login-with-lens:demo-app-session");
+    }
+
     const client = await lens;
     await client?.logout();
     await logout();
     setProfile(null);
+    setSessions([]);
     setOptions([]);
     setShowCreate(false);
     setStatus("idle");
     setMessage("");
+  }
+
+  async function fetchAvailableAccounts(walletAddress: string): Promise<LensAccountOption[]> {
+    const response = await fetch(`${serverUrl}/api/accounts/available`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ walletAddress }),
+    });
+    return readJson(response);
+  }
+
+  async function authenticateAccount(account: LensAccountOption): Promise<{
+    appSessionId: string;
+    profile: LensProfile;
+    authenticatedSessions: LensAuthenticatedSession[];
+  }> {
+    if (!wallet) {
+      throw new Error("Wallet is not connected.");
+    }
+
+    const adapter = await createPrivyLensWalletAdapter(wallet, environment);
+    setStatus("requesting_challenge");
+    const challengeResponse = await fetch(`${serverUrl}/api/auth/challenge`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        walletAddress: wallet.address,
+        accountAddress: account.accountAddress,
+        role: account.role === "manager" ? "accountManager" : "accountOwner",
+      }),
+    });
+    const challenge = await readJson<{
+      flowId: string;
+      challengeId: string;
+      message: string;
+    }>(challengeResponse);
+
+    setStatus("verifying_signature");
+    const signature = await adapter.signMessage(challenge.message);
+
+    const verifyResponse = await fetch(`${serverUrl}/api/auth/verify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        flowId: challenge.flowId,
+        challengeId: challenge.challengeId,
+        signature,
+      }),
+    });
+
+    const authenticated = await readJson<{
+      appSessionId: string;
+      profile: LensProfile;
+      authenticatedSessions: LensAuthenticatedSession[];
+    }>(verifyResponse);
+
+    window.localStorage.setItem("login-with-lens:demo-app-session", authenticated.appSessionId);
+    setStatus("authenticated");
+    return authenticated;
+  }
+
+  function suggestedUsername(walletAddress: string): string {
+    return `lens-${walletAddress.slice(2, 8).toLowerCase()}`;
+  }
+
+  async function readJson<T>(response: Response): Promise<T> {
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error ?? response.statusText);
+    }
+
+    return (await response.json()) as T;
   }
 
   return (
@@ -163,13 +314,13 @@ export function App() {
       <section className="hero-card">
         <div className="logo-row">
           <span className="logo-mark" dangerouslySetInnerHTML={{ __html: LENS_LOGO }} />
-          <span className="eyebrow">Headless login SDK demo</span>
+          <span className="eyebrow">Client + server Lens login demo</span>
         </div>
 
         <h1>Login with Lens</h1>
         <p className="lede">
-          Privy handles the wallet connection. The SDK handles Lens account discovery, account
-          selection, onboarding, and profile hydration.
+          The browser owns wallet UX and account creation. The server owns Lens challenge
+          issuance, signature verification, and the trusted app session.
         </p>
 
         <div className="toolbar">
@@ -228,7 +379,9 @@ export function App() {
               Username
               <input
                 value={form.username}
-                onChange={(event) => setForm((current) => ({ ...current, username: event.target.value }))}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, username: event.target.value }))
+                }
                 placeholder="lens-alice"
               />
             </label>
@@ -236,7 +389,9 @@ export function App() {
               Name
               <input
                 value={form.name ?? ""}
-                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, name: event.target.value }))
+                }
                 placeholder="Alice"
               />
             </label>
@@ -245,7 +400,9 @@ export function App() {
               <textarea
                 rows={3}
                 value={form.bio ?? ""}
-                onChange={(event) => setForm((current) => ({ ...current, bio: event.target.value }))}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, bio: event.target.value }))
+                }
                 placeholder="Building with Lens"
               />
             </label>
@@ -258,16 +415,32 @@ export function App() {
 
       {profile ? (
         <section className="panel profile-panel">
-          <h2>Lens profile</h2>
+          <h2>Trusted session</h2>
           <div className="profile-card">
             <div className="avatar">
-              {profile.pictureUrl ? <img src={profile.pictureUrl} alt={profile.displayName ?? "Lens avatar"} /> : profile.displayName?.slice(0, 1) ?? "L"}
+              {profile.pictureUrl ? (
+                <img src={profile.pictureUrl} alt={profile.displayName ?? "Lens avatar"} />
+              ) : (
+                profile.displayName?.slice(0, 1) ?? "L"
+              )}
             </div>
             <div className="stack compact">
               <strong>{profile.displayName ?? "Unnamed profile"}</strong>
               <span>{profile.username ?? "No username"}</span>
               <span>{profile.bio ?? "No bio yet"}</span>
               <code>{profile.accountAddress}</code>
+            </div>
+          </div>
+
+          <div className="session-list">
+            <h3>Authenticated Sessions</h3>
+            <div className="stack">
+              {sessions.map((session) => (
+                <div className="session-row" key={session.authenticationId}>
+                  <strong>{session.authenticationId}</strong>
+                  <small>{session.signer}</small>
+                </div>
+              ))}
             </div>
           </div>
         </section>

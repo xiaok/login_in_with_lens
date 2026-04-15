@@ -11,7 +11,6 @@ export class BrowserStorageProvider implements LensStorageProvider {
     if (typeof window === "undefined" || !window.localStorage) {
       return null;
     }
-
     return window.localStorage.getItem(this.scopedKey(key));
   }
 
@@ -19,7 +18,6 @@ export class BrowserStorageProvider implements LensStorageProvider {
     if (typeof window === "undefined" || !window.localStorage) {
       return;
     }
-
     window.localStorage.setItem(this.scopedKey(key), value);
   }
 
@@ -27,7 +25,6 @@ export class BrowserStorageProvider implements LensStorageProvider {
     if (typeof window === "undefined" || !window.localStorage) {
       return;
     }
-
     window.localStorage.removeItem(this.scopedKey(key));
   }
 
