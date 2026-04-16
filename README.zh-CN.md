@@ -1,153 +1,302 @@
 # Login With Lens 中文文档
 
-`./login_with_lens` 包含四部分：
+一套用于接入 Lens 登录的轻量级构件。
 
-- `core/`：浏览器 SDK，核心入口是 `createLensLogin(...)`
-- `server/`：服务端 SDK，提供 Lens 认证相关原语
-- `demo/client/`：基于 Privy 的前端演示
-- `demo/server/`：最小后端演示
+`@login-with-lens/core` 负责浏览器侧流程：发现钱包可用的 Lens account、让用户选择账号、在没有账号时创建账号，并返回可直接使用的 Lens session 和 profile 数据。
 
-## 概览
+`@login-with-lens/server` 负责服务端原语：创建 challenge、验证签名、恢复 session、查询已认证 session、注销 session。
 
-`core` 是一个最小化的浏览器 SDK，负责：
+这个仓库不提供现成 UI，也不强制规定 HTTP API。你可以自己决定产品交互、路由设计和会话模型。
 
-- 连接钱包
-- 拉取可用 Lens account
-- 选择 account
-- 创建 account
-- 读取 profile
+English version: [README.md](./README.md)
 
-`server` 是一个最小化的服务端 SDK，负责：
+## 仓库结构
 
-- 创建 challenge
-- 验证签名后的 challenge
-- 恢复 session
-- 查询 authenticated sessions
-- 注销 session
+- `core/`：浏览器 SDK，入口是 `createLensLogin(...)`
+- `server/`：服务端 SDK，入口是 `createLensLoginServer(...)`
+- `demo/client/`：Vite + React + Privy 示例
+- `demo/server/`：最小 Node 服务端示例
 
-SDK 本身不规定 HTTP API 结构。
+## 先选接入方式
 
-如果你要暴露 REST、GraphQL、RPC 或者某个框架专用 handler，都由接入方自己决定；demo 只提供一个参考实现。
+- 只需要浏览器侧 Lens 登录：用 `@login-with-lens/core`
+- 需要后端托管 challenge / verify 流程，并维护应用自己的 session：再加上 `@login-with-lens/server`
 
-## Core 快速接入
+## 登录流程图
+
+```text
+连接钱包
+   |
+   v
+lens.signIn()
+   |
+   +--> checking_accounts
+          |
+          +--> 没有可用 Lens account
+          |      |
+          |      v
+          |   needs_account_creation
+          |      |
+          |      v
+          |   lens.createAccount(...)
+          |      |
+          |      +--> creating_account
+          |      +--> authenticating
+          |      +--> fetching_profile
+          |      `--> authenticated
+          |
+          +--> 只有一个可用 Lens account
+          |      |
+          |      +--> authenticating
+          |      +--> fetching_profile
+          |      `--> authenticated
+          |
+          `--> 有多个可用 Lens account
+                 |
+                 v
+           needs_account_selection
+                 |
+                 v
+        lens.selectAccount(accountAddress)
+                 |
+                 +--> authenticating
+                 +--> fetching_profile
+                 `--> authenticated
+```
+
+如果你走后端 challenge 流程，那么在账号选定之后，到最终应用登录完成之前，通常还会插入 `requesting_challenge -> verifying_signature` 两个状态。
+
+## 安装
+
+这个仓库里的 demo 通过本地 `file:` 依赖消费包。如果你在独立项目里使用，需要同时安装包本身和对应的 Lens peer dependencies。
+
+```bash
+pnpm add @login-with-lens/core @login-with-lens/server
+pnpm add @lens-protocol/client @lens-protocol/metadata @lens-chain/storage-client
+```
+
+如果你只使用服务端包，则不需要 `@lens-protocol/metadata` 和 `@lens-chain/storage-client`。
+
+## 浏览器侧快速接入
+
+### 1. 创建 Lens client
 
 ```ts
 import { createLensLogin } from "@login-with-lens/core";
 
 const lens = createLensLogin({
   appAddress: "0xYOUR_LENS_APP_ADDRESS",
-  environment: "mainnet",
+  environment: "testnet",
   origin: window.location.origin,
   wallet: {
     async getAddress() {
       return wallet.address;
     },
-    async signMessage(message) {
-      return provider.request({
+    async signMessage(message: string) {
+      const signature = await provider.request({
         method: "personal_sign",
         params: [message, wallet.address],
       });
+
+      if (typeof signature !== "string") {
+        throw new Error("钱包返回了非字符串签名。");
+      }
+
+      return signature;
     },
     async handleLensOperation(request) {
-      return executeLensTransaction(request);
+      return executeLensOperation(request);
     },
   },
+  onStatusChange(status) {
+    setStatus(status);
+  },
 });
-
-const result = await lens.signIn();
 ```
 
-根据状态继续：
+只有在你允许用户创建 Lens account 时，`handleLensOperation` 才是必需的。一个真实的钱包适配器示例可以看 [demo/client/src/privy-wallet-adapter.ts](./demo/client/src/privy-wallet-adapter.ts)。
+
+### 2. 页面启动时恢复已有 session
 
 ```ts
-if (result.status === "authenticated") {
-  console.log(result.profile);
+const restored = await lens.resumeSession();
+
+if (restored.status === "authenticated") {
+  setProfile(restored.profile);
+}
+```
+
+### 3. 发起登录，并根据返回状态分支
+
+```ts
+async function handleLensSignIn() {
+  const result = await lens.signIn();
+
+  if (result.status === "authenticated") {
+    setProfile(result.profile);
+    return;
+  }
+
+  if (result.status === "needs_account_selection") {
+    setAccountOptions(result.accounts);
+    return;
+  }
+
+  if (result.status === "needs_account_creation") {
+    setCreateForm({
+      username: result.suggestedUsername,
+      name: "",
+      bio: "",
+    });
+  }
+}
+```
+
+### 4. 由 UI 继续后续动作
+
+```ts
+async function handleSelectAccount(accountAddress: string) {
+  const result = await lens.selectAccount(accountAddress);
+  setProfile(result.profile);
 }
 
-if (result.status === "needs_account_selection") {
-  const next = await lens.selectAccount(result.accounts[0].accountAddress);
-  console.log(next.profile);
-}
-
-if (result.status === "needs_account_creation") {
-  const next = await lens.createAccount({
-    username: result.suggestedUsername,
-    name: "Alice",
-    bio: "Built with Login With Lens",
+async function handleCreateAccount() {
+  const result = await lens.createAccount({
+    username: form.username,
+    name: form.name,
+    bio: form.bio,
+    enableSignless: true,
   });
-  console.log(next.profile);
+
+  setProfile(result.profile);
 }
 ```
 
-## Core API
-
-`createLensLogin(config)`
-
-配置项：
-
-- `appAddress`：Lens app 地址
-- `environment`：`"mainnet"` 或 `"testnet"`
-- `origin`：可选，非浏览器环境下可显式传入
-- `wallet`：钱包适配器
-- `storage`：可选，浏览器侧 Lens session 存储
-- `onStatusChange`：可选，监听流程状态变化
-
-实例方法：
-
-- `signIn()`
-- `selectAccount(accountAddress)`
-- `createAccount({ username, name, bio, picture, coverPicture, enableSignless })`
-- `resumeSession()`
-- `logout()`
-
-## 钱包适配器
+### 5. 退出登录
 
 ```ts
-type LensWalletAdapter = {
-  getAddress(): Promise<string>;
-  signMessage(message: string): Promise<string>;
-  handleLensOperation?: (request: { __typename: string }) => Promise<string>;
-};
+await lens.logout();
+setProfile(null);
+setStatus("idle");
 ```
 
-其中 `handleLensOperation` 只在创建账号等需要发送链上请求时才需要。
+## 状态说明
 
-## Server SDK
+`LensLoginStatus` 是这个仓库里出现过的完整状态集合。其中一部分由 `@login-with-lens/core` 直接发出，另一部分是 demo 在接入后端 challenge 流程时使用的应用层状态。
 
-`server/` 提供的是 Lens 认证原语，不要求固定的 HTTP API 形式。
+| 状态 | 来源 | 含义 | 典型下一步 |
+| --- | --- | --- | --- |
+| `idle` | core | 还没开始流程，或用户已经退出。 | 展示登录按钮。 |
+| `checking_accounts` | core | `signIn()` 正在查询当前钱包可用的 Lens account。 | 显示 loading。 |
+| `requesting_challenge` | 应用 / 服务端流程 | 前端正在请求后端生成 challenge。 | 等待 challenge message 返回。 |
+| `verifying_signature` | 应用 / 服务端流程 | 用户已经签名，后端正在校验签名并建立 session。 | 保持等待态。 |
+| `needs_account_selection` | core | 当前钱包下有多个可用 Lens account。 | 让用户选择一个账号，然后调用 `selectAccount(accountAddress)`。 |
+| `needs_account_creation` | core | 当前钱包还没有 Lens account。 | 展示创建表单，然后调用 `createAccount(...)`。 |
+| `authenticating` | core | SDK 正在把选中的账号变成有效的 Lens session。 | 等待。 |
+| `creating_account` | core | SDK 正在上传 metadata 并发起创建账号操作。 | 等待，并确保实现了 `handleLensOperation`。 |
+| `fetching_profile` | core | 认证已经成功，SDK 正在拉取 profile 详情。 | 等待。 |
+| `authenticated` | core 或应用 | Lens session 已就绪，profile 数据也可用了。 | 渲染登录后的页面。 |
+| `error` | 应用 | 你的应用把当前流程标记成失败。 | 展示错误，并允许用户重试。 |
 
-典型用法：
+补充说明：
+
+- `requesting_challenge`、`verifying_signature`、`error` 不是 `@login-with-lens/core` 自动发出的状态，而是很适合在应用里自己维护的 UI 状态。
+- `selectAccount()` 必须建立在 `signIn()` 已经返回 `needs_account_selection` 的前提下。
+- `createAccount()` 虽然可以直接调用，但推荐流程仍然是 `signIn() -> needs_account_creation -> createAccount(...)`。
+
+## Core API 一览
+
+| 方法 | 返回值 | 适合在什么时候调用 |
+| --- | --- | --- |
+| `signIn()` | `authenticated` 或下一步状态结果 | 启动登录流程 |
+| `selectAccount(accountAddress)` | `authenticated` | 钱包下有多个 Lens account 时 |
+| `createAccount(input)` | `authenticated` | 钱包还没有 Lens account 时 |
+| `resumeSession()` | `authenticated` 或 `not_authenticated` | 页面启动时恢复浏览器侧 Lens session |
+| `logout()` | `void` | 清空当前 Lens session |
+
+`signIn()` 可能返回三种结果：
+
+- `authenticated`：当前信息已经足够，直接完成登录
+- `needs_account_selection`：当前钱包下有多个 Lens account，需要用户选择
+- `needs_account_creation`：当前钱包下还没有 Lens account，需要先创建
+
+## 服务端接入方式
+
+如果你希望 challenge / verify 由后端处理，并且应用自己维护一层 app session，那么用 `@login-with-lens/server`。
+
+### 最小服务端示例
 
 ```ts
 import { createLensLoginServer } from "@login-with-lens/server";
 
-const server = createLensLoginServer({
+const lens = createLensLoginServer({
   appAddress: "0xYOUR_LENS_APP_ADDRESS",
-  environment: "mainnet",
+  environment: "testnet",
   origin: "https://your-app.com",
 });
 
-const challenge = await server.createChallenge({
-  walletAddress: "0x...",
-  accountAddress: "0x...",
-  role: "accountOwner",
+const accounts = await lens.listAvailableAccounts("0xWALLET_ADDRESS");
+
+const challenge = await lens.createChallenge({
+  walletAddress: "0xWALLET_ADDRESS",
+  accountAddress: accounts[0].accountAddress,
+  role: accounts[0].role === "manager" ? "accountManager" : "accountOwner",
 });
 
-const verified = await server.verifyChallenge({
+const verified = await lens.verifyChallenge({
   flowId: challenge.flowId,
   challengeId: challenge.challengeId,
-  signature: "0x...",
+  signature: "0xSIGNED_MESSAGE",
 });
 ```
 
-至于这些能力如何通过你的后端暴露给前端，由你的应用自己决定。
+`verified` 里包含：
+
+- `appSessionId`：你自己的应用可以保存到 cookie、header 或 localStorage 的 session id
+- `profile`：当前认证后的 Lens profile
+- `authenticatedSessions`：这个账号当前的 Lens 已认证 session 列表
+
+### 前端 challenge 调用示例
+
+```ts
+setStatus("requesting_challenge");
+
+const challenge = await fetch("/api/auth/challenge", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    walletAddress: wallet.address,
+    accountAddress: account.accountAddress,
+    role: account.role === "manager" ? "accountManager" : "accountOwner",
+  }),
+}).then((response) => response.json());
+
+setStatus("verifying_signature");
+
+const signature = await walletAdapter.signMessage(challenge.message);
+
+const session = await fetch("/api/auth/verify", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    flowId: challenge.flowId,
+    challengeId: challenge.challengeId,
+    signature,
+  }),
+}).then((response) => response.json());
+
+window.localStorage.setItem("lens-app-session", session.appSessionId);
+setStatus("authenticated");
+```
+
+[demo/server](./demo/server) 展示了一种最小 HTTP 暴露方式。SDK 本身并不要求你必须用 REST、GraphQL 或某个固定框架。
 
 ## Demo
 
-demo 里才定义了 HTTP API，作为一个参考实现：
+如果你想看完整联调流程，直接看 demo 最快。
 
-- `demo/client`：Vite + React + Privy
-- `demo/server`：Node 服务端，使用 `@login-with-lens/server`
+- [demo/client](./demo/client)：Vite + React + Privy
+- [demo/server](./demo/server)：基于 `@login-with-lens/server` 的 Node 服务
 
 前端环境变量：
 
@@ -179,3 +328,4 @@ pnpm install
 pnpm dev
 ```
 
+如果你用 Privy 的邮箱登录，请同时在 Privy Dashboard 打开 email login 和 embedded wallets，因为 Lens 认证仍然需要一次 EVM 钱包签名。
