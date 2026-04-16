@@ -68,14 +68,22 @@ If you use a backend challenge flow, insert `requesting_challenge -> verifying_s
 
 ## Installation
 
-Inside this repo, the demo uses local `file:` dependencies. In a separate app, install the package you need together with its Lens peer dependencies.
+The packages in this repository are currently consumed as local packages. The demo wires them in with `file:` dependencies:
+
+```json
+{
+  "@login-with-lens/core": "file:../../core",
+  "@login-with-lens/server": "file:../../server"
+}
+```
+
+In the consuming app, install the Lens peer dependencies as well:
 
 ```bash
-pnpm add @login-with-lens/core @login-with-lens/server
 pnpm add @lens-protocol/client @lens-protocol/metadata @lens-chain/storage-client
 ```
 
-If you only use the server package, `@lens-protocol/metadata` and `@lens-chain/storage-client` are not required.
+If you only use the server package, `@lens-protocol/metadata` and `@lens-chain/storage-client` are not required. 
 
 ## Client Quick Start
 

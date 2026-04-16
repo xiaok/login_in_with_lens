@@ -68,10 +68,18 @@ lens.signIn()
 
 ## 安装
 
-这个仓库里的 demo 通过本地 `file:` 依赖消费包。如果你在独立项目里使用，需要同时安装包本身和对应的 Lens peer dependencies。
+这个仓库里的包当前是按本地包方式消费的。demo 里的依赖写法是：
+
+```json
+{
+  "@login-with-lens/core": "file:../../core",
+  "@login-with-lens/server": "file:../../server"
+}
+```
+
+消费方项目还需要安装 Lens 的 peer dependencies：
 
 ```bash
-pnpm add @login-with-lens/core @login-with-lens/server
 pnpm add @lens-protocol/client @lens-protocol/metadata @lens-chain/storage-client
 ```
 
