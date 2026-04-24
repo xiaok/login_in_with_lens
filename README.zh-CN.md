@@ -241,6 +241,8 @@ const lens = createLensLoginServer({
   appAddress: "0xYOUR_LENS_APP_ADDRESS",
   environment: "testnet",
   origin: "https://your-app.com",
+  flowTtlMs: 10 * 60 * 1000,
+  sessionTtlMs: 24 * 60 * 60 * 1000,
 });
 
 const accounts = await lens.listAvailableAccounts("0xWALLET_ADDRESS");
@@ -263,6 +265,12 @@ const verified = await lens.verifyChallenge({
 - `appSessionId`：你自己的应用可以保存到 cookie、header 或 localStorage 的 session id
 - `profile`：当前认证后的 Lens profile
 - `authenticatedSessions`：这个账号当前的 Lens 已认证 session 列表
+
+服务端默认行为：
+
+- Challenge flow 使用 `flowTtlMs` 控制生命周期，默认 10 分钟，并且第一次 verify 尝试就会消费掉。
+- 应用 session 使用 `sessionTtlMs` 控制生命周期，默认按最近使用时间保留 24 小时。
+- 内置服务端把 Lens 凭证保存在进程内存里，适合 demo 和简单原型。生产环境应改成持久化、加密的 session 存储，并用安全的 HTTP-only cookie 保存 `appSessionId`。
 
 ### 前端 challenge 调用示例
 
@@ -322,6 +330,8 @@ PORT=8787
 DEMO_CLIENT_ORIGIN=http://localhost:5173
 DEMO_LENS_APP_ADDRESS=0xC75A89145d765c396fd75CbD16380Eb184Bd2ca7
 DEMO_LENS_ENVIRONMENT=testnet
+DEMO_LENS_FLOW_TTL_MS=600000
+DEMO_LENS_SESSION_TTL_MS=86400000
 ```
 
 运行方式：

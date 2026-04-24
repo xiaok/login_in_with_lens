@@ -5,6 +5,7 @@ export type {
   LensAccountOption,
   LensAccountRole,
   LensAuthenticatedResult,
+  LensAuthenticatedSession,
   LensEnvironment,
   LensLoginConfig,
   LensLoginStatus,

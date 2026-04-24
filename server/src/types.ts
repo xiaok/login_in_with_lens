@@ -41,6 +41,7 @@ export type LensServerConfig = {
   appAddress: string;
   environment: LensEnvironment;
   origin?: string;
+  flowTtlMs?: number;
   sessionTtlMs?: number;
 };
 

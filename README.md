@@ -241,6 +241,8 @@ const lens = createLensLoginServer({
   appAddress: "0xYOUR_LENS_APP_ADDRESS",
   environment: "testnet",
   origin: "https://your-app.com",
+  flowTtlMs: 10 * 60 * 1000,
+  sessionTtlMs: 24 * 60 * 60 * 1000,
 });
 
 const accounts = await lens.listAvailableAccounts("0xWALLET_ADDRESS");
@@ -263,6 +265,12 @@ const verified = await lens.verifyChallenge({
 - `appSessionId`: the session identifier your app can keep in a cookie, header, or local storage
 - `profile`: the authenticated Lens profile
 - `authenticatedSessions`: active Lens sessions for that account
+
+Server defaults:
+
+- Challenge flows use `flowTtlMs`, defaulting to 10 minutes, and are consumed by the first verify attempt.
+- Application sessions use `sessionTtlMs`, defaulting to 24 hours of inactivity.
+- The built-in server keeps Lens credentials in process memory. That is suitable for the demo and simple prototypes, but production deployments should use durable, encrypted session storage and secure HTTP-only cookies for `appSessionId`.
 
 ### Frontend challenge example
 
@@ -322,6 +330,8 @@ PORT=8787
 DEMO_CLIENT_ORIGIN=http://localhost:5173
 DEMO_LENS_APP_ADDRESS=0xC75A89145d765c396fd75CbD16380Eb184Bd2ca7
 DEMO_LENS_ENVIRONMENT=testnet
+DEMO_LENS_FLOW_TTL_MS=600000
+DEMO_LENS_SESSION_TTL_MS=86400000
 ```
 
 Run the demo:

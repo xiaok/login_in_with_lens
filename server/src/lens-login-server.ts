@@ -30,6 +30,9 @@ import {
   profileFromAccount,
 } from "./utils";
 
+const DEFAULT_FLOW_TTL_MS = 1000 * 60 * 10;
+const DEFAULT_SESSION_TTL_MS = 1000 * 60 * 60 * 24;
+
 type FlowState = {
   challengeId: string;
   client: PublicClient;
@@ -46,16 +49,23 @@ type SessionState = {
 export class LensLoginServer {
   private readonly flows = new Map<string, FlowState>();
   private readonly sessions = new Map<string, SessionState>();
+  private readonly flowTtlMs: number;
   private readonly sessionTtlMs: number;
 
   constructor(private readonly config: LensServerConfig) {
-    this.sessionTtlMs = config.sessionTtlMs ?? 1000 * 60 * 60 * 24;
+    this.flowTtlMs = normalizeTtl(config.flowTtlMs, DEFAULT_FLOW_TTL_MS, "flowTtlMs");
+    this.sessionTtlMs = normalizeTtl(
+      config.sessionTtlMs,
+      DEFAULT_SESSION_TTL_MS,
+      "sessionTtlMs",
+    );
   }
 
   async listAvailableAccounts(walletAddress: string) {
     const client = this.createClient();
+    const managedBy = evmAddress(requireNonEmptyString(walletAddress, "walletAddress"));
     const result = await fetchAccountsAvailable(client, {
-      managedBy: evmAddress(walletAddress),
+      managedBy,
       includeOwned: true,
     });
 
@@ -69,19 +79,25 @@ export class LensLoginServer {
 
     const storage = new MemoryStorageProvider();
     const client = this.createClient(storage);
+    const walletAddress = evmAddress(requireNonEmptyString(input.walletAddress, "walletAddress"));
+    const accountAddress = evmAddress(
+      requireNonEmptyString(input.accountAddress, "accountAddress"),
+    );
+    const role = requireChallengeRole(input.role);
+
     const challenge = await client.challenge(
-      input.role === "accountManager"
+      role === "accountManager"
         ? {
             accountManager: {
-              account: evmAddress(input.accountAddress),
-              manager: evmAddress(input.walletAddress),
+              account: accountAddress,
+              manager: walletAddress,
               app: evmAddress(this.config.appAddress),
             },
           }
         : {
             accountOwner: {
-              account: evmAddress(input.accountAddress),
-              owner: evmAddress(input.walletAddress),
+              account: accountAddress,
+              owner: walletAddress,
               app: evmAddress(this.config.appAddress),
             },
           },
@@ -110,18 +126,23 @@ export class LensLoginServer {
   }): Promise<LensVerifiedSession> {
     this.cleanupExpiredSessions();
 
-    const flow = this.flows.get(input.flowId);
+    const flowId = requireNonEmptyString(input.flowId, "flowId");
+    const challengeId = requireNonEmptyString(input.challengeId, "challengeId");
+    const signature = requireNonEmptyString(input.signature, "signature");
+    const flow = this.flows.get(flowId);
     if (!flow) {
       throw new Error("Unknown or expired Lens auth flow.");
     }
 
-    if (flow.challengeId !== input.challengeId) {
+    if (flow.challengeId !== challengeId) {
       throw new Error("Challenge id does not match the active auth flow.");
     }
 
+    this.flows.delete(flowId);
+
     const authenticated = await flow.client.authenticate({
-      id: input.challengeId,
-      signature: input.signature as `0x${string}`,
+      id: challengeId,
+      signature: signature as `0x${string}`,
     });
     const sessionClient = assertOk(authenticated, "Failed to authenticate Lens signature");
 
@@ -131,9 +152,13 @@ export class LensLoginServer {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
-    this.flows.delete(input.flowId);
 
-    return this.buildVerifiedSession(appSessionId, sessionClient);
+    try {
+      return await this.buildVerifiedSession(appSessionId, sessionClient);
+    } catch (error) {
+      this.sessions.delete(appSessionId);
+      throw error;
+    }
   }
 
   async getCurrentSession(appSessionId: string): Promise<LensVerifiedSession> {
@@ -190,7 +215,7 @@ export class LensLoginServer {
   private async resumeSession(appSessionId: string): Promise<SessionClient> {
     this.cleanupExpiredSessions();
 
-    const session = this.sessions.get(appSessionId);
+    const session = this.sessions.get(requireNonEmptyString(appSessionId, "appSessionId"));
     if (!session) {
       throw new Error("Unknown or expired application session.");
     }
@@ -215,7 +240,7 @@ export class LensLoginServer {
     const now = Date.now();
 
     for (const [flowId, flow] of this.flows.entries()) {
-      if (now - flow.createdAt > this.sessionTtlMs) {
+      if (now - flow.createdAt > this.flowTtlMs) {
         this.flows.delete(flowId);
       }
     }
@@ -226,6 +251,34 @@ export class LensLoginServer {
       }
     }
   }
+}
+
+function normalizeTtl(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number of milliseconds.`);
+  }
+
+  return value;
+}
+
+function requireNonEmptyString(value: string, name: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${name} is required.`);
+  }
+
+  return value;
+}
+
+function requireChallengeRole(role: LensChallengeRequest["role"]): LensChallengeRequest["role"] {
+  if (role !== "accountOwner" && role !== "accountManager") {
+    throw new Error("role must be accountOwner or accountManager.");
+  }
+
+  return role;
 }
 
 export function createLensLoginServer(config: LensServerConfig): LensLoginServer {
