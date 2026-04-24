@@ -121,6 +121,7 @@ export function App() {
         throw new Error("Lens client could not be initialized.");
       }
 
+      setStatus("checking_accounts");
       const result = await fetchAvailableAccounts(wallet.address);
 
       if (result.length > 0) {
@@ -133,6 +134,7 @@ export function App() {
           return;
         }
 
+        setStatus("needs_account_selection");
         setOptions(result);
         setShowCreate(false);
         setForm((current) => ({
@@ -142,6 +144,7 @@ export function App() {
         return;
       }
 
+      setStatus("needs_account_creation");
       setOptions([]);
       setShowCreate(true);
       setForm((current) => ({
